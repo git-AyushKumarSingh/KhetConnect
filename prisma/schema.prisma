@@ -1,0 +1,211 @@
+// Prisma Schema for KrishiDirect AgriTech Marketplace
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  FARMER
+  BUYER_RETAIL
+  BUYER_BULK
+  LOGISTICS_DRIVER
+  ADMIN
+}
+
+enum ProductCategory {
+  VEGETABLES
+  FRUITS
+  GRAINS_CEREALS
+  PULSES_LEGUMES
+  SPICES
+  ORGANIC_SPECIALTY
+}
+
+enum ProduceStatus {
+  AVAILABLE
+  COMMITTED
+  SOLD_OUT
+}
+
+enum OrderStatus {
+  PLACED
+  CLUSTERED
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  ESCROW_HELD
+  RELEASED_TO_FARMER
+  REFUNDED
+}
+
+enum TripStatus {
+  SCHEDULED
+  PICKING_UP
+  IN_TRANSIT
+  COMPLETED
+  CANCELLED
+}
+
+model User {
+  id              String         @id @default(cuid())
+  name            String
+  phone           String         @unique
+  email           String?        @unique
+  role            Role           @default(BUYER_RETAIL)
+  avatarUrl       String?
+  state           String
+  district        String
+  villageOrCity   String?
+  farmSizeAcres   Float?
+  fpoName         String?
+  businessName    String?
+  gstin           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  produces        FarmProduce[]
+  orders          Order[]        @relation("BuyerOrders")
+  assignedTrips   LogisticsTrip[] @relation("DriverTrips")
+
+  @@index([role])
+  @@index([state, district])
+}
+
+model FarmProduce {
+  id                   String          @id @default(cuid())
+  farmerId             String
+  cropName             String
+  variety              String?
+  category             ProductCategory @default(VEGETABLES)
+  quantityKg           Float
+  minOrderQuantityKg   Float           @default(10)
+  basePricePerKg       Float           // Farmer's direct listing price
+  mandiReferencePrice  Float           // Benchmark local APMC mandi price
+  harvestDate          DateTime
+  shelfLifeDays        Int             @default(7)
+  locationLat          Float
+  locationLng          Float
+  locationName         String          // e.g. "Niphad, Nashik, MH"
+  imageQualityScore    Float           @default(90.0) // 0-100 AI computed freshness & grade score
+  qualityGrade         String          @default("Grade A") // Grade A (Export), Grade B (Retail), etc.
+  organicCertified     Boolean         @default(false)
+  imageUrl             String?
+  status               ProduceStatus   @default(AVAILABLE)
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  farmer               User            @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+  orderItems           OrderItem[]
+
+  @@index([farmerId])
+  @@index([category])
+  @@index([status])
+}
+
+model Order {
+  id                  String        @id @default(cuid())
+  buyerId             String
+  buyerType           Role          @default(BUYER_RETAIL)
+  totalAmount         Float
+  farmerPayoutAmount  Float         // 82% direct to farmer escrow
+  logisticsFee        Float         // 12% logistics allocation
+  platformFee         Float         // 6% quality testing & platform maintenance
+  status              OrderStatus   @default(PLACED)
+  paymentStatus       PaymentStatus @default(ESCROW_HELD)
+  deliveryAddress     String
+  deliveryLat         Float
+  deliveryLng         Float
+  deliveryDistrict    String
+  deliveryState       String
+  tripId              String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  buyer               User          @relation("BuyerOrders", fields: [buyerId], references: [id])
+  trip                LogisticsTrip? @relation(fields: [tripId], references: [id])
+  items               OrderItem[]
+
+  @@index([buyerId])
+  @@index([status])
+}
+
+model OrderItem {
+  id         String      @id @default(cuid())
+  orderId    String
+  produceId  String
+  quantityKg Float
+  unitPrice  Float       // price per kg at purchase
+
+  order      Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  produce    FarmProduce @relation(fields: [produceId], references: [id])
+
+  @@index([orderId])
+  @@index([produceId])
+}
+
+model LogisticsTrip {
+  id                      String      @id @default(cuid())
+  driverId                String
+  vehicleNumber           String?
+  vehicleType             String      @default("Tata Ace 1.5T")
+  vehicleCapacityKg       Float       @default(1500.0)
+  currentLoadKg           Float       @default(0.0)
+  routeWaypoints          Json        // Array of waypoint coordinates and stop metadata
+  optimizedOrder          Json        // Sequence of pickup and drop stops
+  geometryGeoJson         Json?       // GeoJSON LineString coordinates for map polyline
+  status                  TripStatus  @default(SCHEDULED)
+  totalDistanceKm         Float       @default(0.0)
+  estimatedFuelSaved      Float       @default(0.0) // Liters of diesel saved via pooling
+  carbonEmissionsSavedKg  Float       @default(0.0) // kg of CO2 emissions prevented
+  originHub               String      @default("Nashik Agri-Logistics Hub")
+  destinationHub          String      @default("Mumbai Vashi APMC Terminal")
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+
+  driver                  User        @relation("DriverTrips", fields: [driverId], references: [id])
+  orders                  Order[]
+
+  @@index([driverId])
+  @@index([status])
+}
+
+model MandiPriceRecord {
+  id                   String   @id @default(cuid())
+  state                String
+  district             String
+  marketName           String
+  commodity            String
+  variety              String?
+  minPrice             Float
+  maxPrice             Float
+  modalPricePerQuintal Float
+  priceDate            DateTime
+  createdAt            DateTime @default(now())
+
+  @@index([commodity, state])
+}
+
+model DemandForecastRecord {
+  id                    String   @id @default(cuid())
+  region                String
+  cropName              String
+  date                  DateTime
+  predictedDemandTonnes Float
+  lowerBoundTonnes      Float
+  upperBoundTonnes      Float
+  seasonalityIndex      Float
+  festivalImpactFactor  Float
+  confidenceScore       Float    @default(0.88)
+  recommendedAction     String
+
+  @@index([cropName, region])
+}
